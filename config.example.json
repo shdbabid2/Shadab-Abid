@@ -1,0 +1,10 @@
+{
+  "query": "SOL/USDC",
+  "chain": "solana",
+  "interval_seconds": 60,
+  "top_n": 10,
+  "min_liquidity_usd": 10000,
+  "min_volume_24h_usd": 5000,
+  "alert_abs_price_change_5m_pct": 5.0,
+  "telegram_enabled": false
+}
