@@ -1,0 +1,10 @@
+# Local configuration and secrets
+config.json
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Local output
+*.log
