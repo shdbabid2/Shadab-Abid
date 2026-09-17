@@ -12,17 +12,17 @@ jobs:
     timeout-minutes: 8
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
       - name: Paper-mode safety check
         env:
-          env:
-  TRADING_MODE: paper
-  JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
-  SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
-        
+          TRADING_MODE: paper
+          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
+          SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
         run: python trade_engine.py --once
