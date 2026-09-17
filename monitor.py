@@ -30,7 +30,10 @@ DEX_LATEST_PROFILES = DEX + "/token-profiles/latest/v1"
 DEX_LATEST_BOOSTS = DEX + "/token-boosts/latest/v1"
 DEX_LATEST_CTO = DEX + "/community-takeovers/latest/v1"
 
-DEFAULT_RPC = "https://api.mainnet-beta.solana.com"
+DEFAULT_RPC = os.getenv(
+    "SOLANA_RPC_URL",
+    "https://api.mainnet-beta.solana.com"
+)
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "rpc_url": DEFAULT_RPC,
