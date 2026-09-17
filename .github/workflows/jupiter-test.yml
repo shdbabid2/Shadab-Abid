@@ -1,0 +1,127 @@
+name: Jupiter Quote Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quote-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Test Jupiter USDC to SOL to USDC quotes
+        env:
+          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
+
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import time
+          import urllib.parse
+          import urllib.request
+
+          API_KEY = os.environ.get("JUPITER_API_KEY", "").strip()
+
+          if not API_KEY:
+              raise SystemExit("JUPITER_API_KEY secret is missing")
+
+          USDC = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+          SOL = "So11111111111111111111111111111111111111112"
+
+          ORDER_URL = "https://api.jup.ag/swap/v2/order"
+
+          def quote(input_mint, output_mint, amount):
+              params = urllib.parse.urlencode({
+                  "inputMint": input_mint,
+                  "outputMint": output_mint,
+                  "amount": str(int(amount)),
+              })
+
+              request = urllib.request.Request(
+                  ORDER_URL + "?" + params,
+                  headers={
+                      "Accept": "application/json",
+                      "x-api-key": API_KEY,
+                      "User-Agent": "SolanaMemeBot-JupiterTest/1.0",
+                  },
+              )
+
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  data = json.loads(
+                      response.read().decode("utf-8")
+                  )
+
+              if data.get("error") or data.get("errorMessage"):
+                  raise RuntimeError(
+                      data.get("error")
+                      or data.get("errorMessage")
+                  )
+
+              if not data.get("outAmount"):
+                  raise RuntimeError(
+                      "Jupiter returned no outAmount"
+                  )
+
+              return data
+
+
+          # $5.00 USDC
+          starting_usdc = 5_000_000
+
+          buy_quote = quote(
+              USDC,
+              SOL,
+              starting_usdc
+          )
+
+          sol_out = int(
+              buy_quote["outAmount"]
+          )
+
+          # Free Jupiter API keys are rate limited.
+          time.sleep(1.2)
+
+          sell_quote = quote(
+              SOL,
+              USDC,
+              sol_out
+          )
+
+          usdc_back = (
+              int(sell_quote["outAmount"])
+              / 1_000_000
+          )
+
+          print("JUPITER API KEY: OK")
+          print("QUOTE 1: $5 USDC -> SOL: OK")
+          print(
+              f"SOL output: {sol_out} lamports"
+          )
+
+          print("QUOTE 2: SOL -> USDC: OK")
+
+          print(
+              f"Immediate round-trip quoted value: "
+              f"${usdc_back:.4f}"
+          )
+
+          print(
+              f"Buy router: "
+              f"{buy_quote.get('router', 'unknown')}"
+          )
+
+          print(
+              f"Sell router: "
+              f"{sell_quote.get('router', 'unknown')}"
+          )
+
+          print(
+              "NO WALLET USED. "
+              "NO TRANSACTION SIGNED. "
+              "NO TRADE EXECUTED."
+          )
+          PY
