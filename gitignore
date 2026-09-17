@@ -1,0 +1,8 @@
+config.json
+.env
+bot_state.json
+.scanner_state.json
+node_modules/
+__pycache__/
+*.py[cod]
+*.log
