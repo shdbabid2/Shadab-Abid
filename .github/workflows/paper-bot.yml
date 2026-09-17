@@ -20,6 +20,9 @@ jobs:
 
       - name: Paper-mode safety check
         env:
-          TRADING_MODE: paper
-          JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
+          env:
+  TRADING_MODE: paper
+  JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
+  SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
+        
         run: python trade_engine.py --once
