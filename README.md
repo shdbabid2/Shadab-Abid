@@ -1,116 +1,159 @@
-# Solana Token Monitor
+# Solana Meme Bot v0.4
 
-A small, dependency-free, open-source **read-only** market monitor for Solana pairs.
+A conservative Solana new-token scanner plus **paper-trading-first** execution engine.
 
-It uses the public DEX Screener API to search Solana pairs, filters results by liquidity and 24-hour volume, prints price/market information, and can optionally send Telegram alerts when the configured 5-minute price-change threshold is crossed.
+## Safety defaults
 
-> This project does **not** place trades, sign transactions, connect to a wallet, or promise profits.
+The bot ships in **paper mode**. It does not become a live trader merely because a wallet key exists.
 
-## Features
+A live buy requires all of the following:
 
-- Search DEX Screener for Solana pairs
-- Sort results by liquidity
-- Filter by minimum liquidity and 24-hour volume
-- Display USD price, liquidity, volume, 5-minute change, and DEX
-- Configurable 5-minute movement alerts
-- Optional Telegram notifications
-- Continuous monitoring or one-shot mode
-- No third-party Python packages required
-- No wallet/private-key access
+- setup score **99 or 100**
+- risk level exactly `LOW`
+- risk score exactly `0`
+- evidence coverage exactly `100%`
+- mint authority absent
+- freeze authority absent
+- exact-address market data
+- Jupiter buy quote available
+- Jupiter sell quote available for the expected token output
+- buy and sell quote price impact below the configured limit
+- immediate round-trip quote at least **$4.70** from a **$5.00** entry
+- daily limits not reached
+- no other open position
 
-## Requirements
+The score is a rule score, **not** a probability of profit or a 99% guarantee.
 
-- Python 3.10 or newer
-- Internet access
+## Position limits
 
-## Quick start
+Default position:
 
-Clone or download the repository, then copy the example configuration:
+- Entry: **$5.00 USDC**
+- Hard-stop trigger: **$4.10 quoted exit value**
+- Planned loss at trigger: **$0.90 / 18%**, before slippage and fees
+- One position at a time
+- Maximum 3 trades/day
+- Stop after 3 consecutive losses
+- Daily realized loss limit: **$2.70**
+- No averaging down
+- Maximum hold: 60 minutes
+- Take-profit is disabled by default
+
+A $4.10 stop **cannot guarantee a $4.10 execution**. Fast meme-coin crashes, missing liquidity, transaction failure, slippage, RPC failure, or network congestion can produce a worse exit.
+
+## Files
+
+- `monitor.py` — exact-mint scanner and risk/setup scoring
+- `trade_engine.py` — paper/live orchestration and risk limits
+- `jupiter_live.mjs` — Jupiter Swap V2 signer/executor
+- `config.example.json` — configuration
+- `test_bot.py` — offline tests
+- `.github/workflows/tests.yml` — automated tests
+- `.github/workflows/paper-bot.yml` — manual paper-mode check only
+
+## Data and routing
+
+Scanner data:
+- DEX Screener exact Solana token-pair endpoint
+- Solana RPC `getAccountInfo`, `getTokenSupply`, and `getTokenLargestAccounts`
+
+Trading quotes/execution:
+- Jupiter Swap V2 `/order` and `/execute`
+
+## Setup
+
+Copy the configuration:
 
 ```bash
 cp config.example.json config.json
 ```
 
-Run one check:
+For Jupiter quote checks, set:
 
 ```bash
-python monitor.py --once
+export JUPITER_API_KEY="your-key"
 ```
 
-Run continuously:
+Test one mint:
 
 ```bash
-python monitor.py
+python monitor.py --mint TOKEN_MINT
 ```
 
-Try another search without editing the config:
+Discover recent candidates:
 
 ```bash
-python monitor.py --once --query "BONK/USDC"
+python monitor.py --discover
 ```
 
-## Configuration
-
-`config.example.json` contains:
-
-```json
-{
-  "query": "SOL/USDC",
-  "chain": "solana",
-  "interval_seconds": 60,
-  "top_n": 10,
-  "min_liquidity_usd": 10000,
-  "min_volume_24h_usd": 5000,
-  "alert_abs_price_change_5m_pct": 5.0,
-  "telegram_enabled": false
-}
-```
-
-Copy it to `config.json` and edit your local copy. `config.json` is ignored by Git so personal settings are not committed accidentally.
-
-## Telegram alerts
-
-Telegram alerts are optional. Keep secrets out of source code.
-
-1. Create a bot with Telegram's BotFather.
-2. Obtain your chat ID.
-3. Set these environment variables:
+Run one paper-trading cycle:
 
 ```bash
-export TELEGRAM_BOT_TOKEN="your-bot-token"
-export TELEGRAM_CHAT_ID="your-chat-id"
+python trade_engine.py --once
 ```
 
-4. Set `"telegram_enabled": true` in `config.json`.
+Run paper mode continuously:
 
-On Windows PowerShell:
-
-```powershell
-$env:TELEGRAM_BOT_TOKEN="your-bot-token"
-$env:TELEGRAM_CHAT_ID="your-chat-id"
+```bash
+python trade_engine.py
 ```
 
-Never commit a bot token, wallet seed phrase, or private key.
+## Live trading
 
-## What an alert means
+**Do paper testing first.** The recommended activation rule is at least 20–50 logged paper trades before considering live mode.
 
-An alert only means that a configured market-data threshold was crossed. It is **not a buy/sell signal** and should not be treated as a guarantee about future price movement.
+For live execution install Node dependencies:
 
-## Data source
+```bash
+npm install
+```
 
-Market data comes from the DEX Screener public API. Availability, rate limits, and returned fields are controlled by DEX Screener.
+Use a **new, dedicated, low-balance Solana wallet**. Never use a main wallet.
 
-## Roadmap
+Required environment variables:
 
-- Token-address watchlists
-- Local CSV/JSON snapshots
-- More configurable alert conditions
-- Basic tests and CI
-- Additional notification backends
+```bash
+export JUPITER_API_KEY="..."
+export BS58_PRIVATE_KEY="..."
+export TRADING_MODE="live"
+export ENABLE_LIVE_TRADING="YES"
+export I_UNDERSTAND_LIVE_TRADING="YES"
+```
 
-## Contributing
+Optional:
 
-Issues and pull requests are welcome. Please avoid committing API tokens, private keys, seed phrases, or other secrets.
+```bash
+export LIVE_SLIPPAGE_BPS="100"
+```
+
+Do not put private keys in `config.json`, GitHub source code, screenshots, or chat messages.
+
+## GitHub Actions
+
+The included GitHub Actions workflow runs only **paper mode / tests**. It intentionally does not store or use a private wallet key.
+
+For a real stop-loss monitor, live mode should run continuously on a reliable machine/server. GitHub scheduled workflows can be delayed and are not appropriate for a time-sensitive meme-coin stop.
+
+## Telegram
+
+Set:
+
+```bash
+export TELEGRAM_BOT_TOKEN="..."
+export TELEGRAM_CHAT_ID="..."
+```
+
+Then set `"telegram_enabled": true` under `"trading"` in `config.json`.
+
+## Accuracy
+
+This project intentionally never prints "guaranteed safe" or "99.9% scam detection." On-chain checks can identify real warning signs, but they cannot know a developer's future actions or guarantee liquidity will remain available.
+
+## Tests
+
+```bash
+python -m unittest -v test_bot.py
+```
 
 ## License
 
