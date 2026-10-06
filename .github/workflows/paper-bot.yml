@@ -2,9 +2,15 @@ name: Paper Bot Check
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
   contents: read
+
+concurrency:
+  group: paper-bot
+  cancel-in-progress: false
 
 jobs:
   paper:
@@ -20,9 +26,25 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Create paper configuration
+        run: |
+          cp config.example.json config.json
+          python - <<'PY'
+          import json
+          p = "config.json"
+          with open(p) as f:
+              c = json.load(f)
+          c["trading"]["trading_mode"] = "paper"
+          c["trading"]["telegram_enabled"] = True
+          with open(p, "w") as f:
+              json.dump(c, f, indent=2)
+          PY
+
       - name: Paper-mode safety check
         env:
           TRADING_MODE: paper
           JUPITER_API_KEY: ${{ secrets.JUPITER_API_KEY }}
           SOLANA_RPC_URL: ${{ secrets.SOLANA_RPC_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python trade_engine.py --once
