@@ -12,7 +12,8 @@ Live trading requires ALL of:
 - BS58_PRIVATE_KEY
 - Node.js + npm install
 
-The live wallet should be a dedicated low-balance wallet, never a main wallet.
+Telegram BUY/SELL messages are informational signals.
+Paper mode never executes a real trade.
 """
 
 from __future__ import annotations
@@ -114,6 +115,7 @@ def fresh_state() -> dict[str, Any]:
 
 def load_state(path: str) -> dict[str, Any]:
     p = Path(path)
+
     if not p.exists():
         return fresh_state()
 
@@ -135,16 +137,31 @@ def load_state(path: str) -> dict[str, Any]:
 
 
 def save_state(path: str, state: dict[str, Any]) -> None:
-    state["seen_mints"] = list(dict.fromkeys(state.get("seen_mints", [])))[-3000:]
-    state["paper_history"] = state.get("paper_history", [])[-500:]
-    Path(path).write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    state["seen_mints"] = list(
+        dict.fromkeys(state.get("seen_mints", []))
+    )[-3000:]
+
+    state["paper_history"] = state.get(
+        "paper_history", []
+    )[-500:]
+
+    Path(path).write_text(
+        json.dumps(state, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
-def daily_gate(state: dict[str, Any], trading: dict[str, Any]) -> tuple[bool, str]:
+def daily_gate(
+    state: dict[str, Any],
+    trading: dict[str, Any],
+) -> tuple[bool, str]:
+
     if state.get("position"):
         return False, "position already open"
 
-    if as_int(state.get("trades_today")) >= as_int(trading.get("max_trades_per_day"), 3):
+    if as_int(state.get("trades_today")) >= as_int(
+        trading.get("max_trades_per_day"), 3
+    ):
         return False, "daily trade limit reached"
 
     if as_int(state.get("consecutive_losses")) >= as_int(
@@ -153,40 +170,55 @@ def daily_gate(state: dict[str, Any], trading: dict[str, Any]) -> tuple[bool, st
         return False, "consecutive-loss limit reached"
 
     pnl = num(state.get("realized_pnl_usdc"))
-    if pnl <= -abs(num(trading.get("daily_loss_limit_usdc"), 2.70)):
+
+    if pnl <= -abs(
+        num(trading.get("daily_loss_limit_usdc"), 2.70)
+    ):
         return False, "daily loss limit reached"
 
     return True, "ok"
 
 
 def report_gate(
-    report: dict[str, Any], trading: dict[str, Any]
+    report: dict[str, Any],
+    trading: dict[str, Any],
 ) -> tuple[bool, list[str]]:
+
     failures: list[str] = []
 
     if as_int(report.get("setup_score")) < as_int(
         trading.get("min_setup_score"), 99
     ):
-        failures.append(f"setup score below {trading.get('min_setup_score')}")
+        failures.append(
+            f"setup score below {trading.get('min_setup_score')}"
+        )
 
     if str(report.get("risk_level")) != str(
         trading.get("required_risk_level") or "LOW"
     ):
-        failures.append(f"risk level is {report.get('risk_level')}")
+        failures.append(
+            f"risk level is {report.get('risk_level')}"
+        )
 
-    if bool(trading.get("require_zero_risk_score", True)) and as_int(
-        report.get("risk_score")
-    ) != 0:
-        failures.append(f"risk score is {report.get('risk_score')}")
+    if bool(
+        trading.get("require_zero_risk_score", True)
+    ) and as_int(report.get("risk_score")) != 0:
+        failures.append(
+            f"risk score is {report.get('risk_score')}"
+        )
 
     if as_int(report.get("data_coverage_pct")) < as_int(
         trading.get("required_data_coverage_pct"), 100
     ):
-        failures.append(f"data coverage is {report.get('data_coverage_pct')}%")
+        failures.append(
+            f"data coverage is {report.get('data_coverage_pct')}%"
+        )
 
     chain = report.get("chain") or {}
+
     if chain.get("mint_authority"):
         failures.append("mint authority active")
+
     if chain.get("freeze_authority"):
         failures.append("freeze authority active")
 
@@ -194,9 +226,15 @@ def report_gate(
 
 
 def jupiter_api_key() -> str:
-    key = os.getenv("JUPITER_API_KEY", "").strip()
+    key = os.getenv(
+        "JUPITER_API_KEY", ""
+    ).strip()
+
     if not key:
-        raise RuntimeError("JUPITER_API_KEY is required for Jupiter Swap V2 quotes")
+        raise RuntimeError(
+            "JUPITER_API_KEY is required for Jupiter Swap V2 quotes"
+        )
+
     return key
 
 
@@ -206,6 +244,7 @@ def jupiter_quote(
     amount: int,
     timeout: int = 15,
 ) -> dict[str, Any]:
+
     params = urllib.parse.urlencode(
         {
             "inputMint": input_mint,
@@ -223,76 +262,154 @@ def jupiter_quote(
         },
     )
 
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    with urllib.request.urlopen(
+        request,
+        timeout=timeout,
+    ) as response:
+        payload = json.loads(
+            response.read().decode("utf-8")
+        )
 
     if not isinstance(payload, dict):
-        raise RuntimeError("Jupiter returned a non-object quote")
+        raise RuntimeError(
+            "Jupiter returned a non-object quote"
+        )
 
     if payload.get("error") or payload.get("errorMessage"):
         raise RuntimeError(
-            str(payload.get("error") or payload.get("errorMessage"))
+            str(
+                payload.get("error")
+                or payload.get("errorMessage")
+            )
         )
 
     if not payload.get("outAmount"):
-        raise RuntimeError("Jupiter quote has no outAmount")
+        raise RuntimeError(
+            "Jupiter quote has no outAmount"
+        )
 
     return payload
 
 
-def quote_price_impact_pct(quote: dict[str, Any]) -> float:
-    if quote.get("priceImpact") not in (None, ""):
-        value = abs(num(quote.get("priceImpact")))
-        return value * 100 if value <= 1 else value
+def quote_price_impact_pct(
+    quote: dict[str, Any],
+) -> float:
 
-    value = abs(num(quote.get("priceImpactPct")))
-    return value * 100 if value <= 1 else value
+    if quote.get("priceImpact") not in (
+        None,
+        "",
+    ):
+        value = abs(
+            num(quote.get("priceImpact"))
+        )
+        return (
+            value * 100
+            if value <= 1
+            else value
+        )
+
+    value = abs(
+        num(quote.get("priceImpactPct"))
+    )
+
+    return (
+        value * 100
+        if value <= 1
+        else value
+    )
 
 
 def pretrade_roundtrip(
     mint: str,
     trading: dict[str, Any],
 ) -> tuple[bool, dict[str, Any]]:
-    size_usdc = num(trading.get("trade_size_usdc"), 5.0)
-    buy_amount = round(size_usdc * 10**USDC_DECIMALS)
 
-    buy_quote = jupiter_quote(USDC_MINT, mint, buy_amount)
-    token_out = as_int(buy_quote.get("outAmount"))
+    size_usdc = num(
+        trading.get("trade_size_usdc"),
+        5.0,
+    )
+
+    buy_amount = round(
+        size_usdc * 10**USDC_DECIMALS
+    )
+
+    buy_quote = jupiter_quote(
+        USDC_MINT,
+        mint,
+        buy_amount,
+    )
+
+    token_out = as_int(
+        buy_quote.get("outAmount")
+    )
 
     if token_out <= 0:
-        return False, {"reason": "buy quote returned zero token output"}
+        return False, {
+            "reason": "buy quote returned zero token output"
+        }
 
-    buy_impact = quote_price_impact_pct(buy_quote)
-    max_impact = num(trading.get("max_quote_price_impact_pct"), 1.0)
+    buy_impact = quote_price_impact_pct(
+        buy_quote
+    )
+
+    max_impact = num(
+        trading.get(
+            "max_quote_price_impact_pct"
+        ),
+        1.0,
+    )
 
     if buy_impact > max_impact:
         return False, {
-            "reason": f"buy quote price impact {buy_impact:.2f}% > {max_impact:.2f}%",
+            "reason": (
+                f"buy quote price impact "
+                f"{buy_impact:.2f}% > "
+                f"{max_impact:.2f}%"
+            ),
             "buy_quote": buy_quote,
         }
 
-    sell_quote = jupiter_quote(mint, USDC_MINT, token_out)
-    sell_impact = quote_price_impact_pct(sell_quote)
+    sell_quote = jupiter_quote(
+        mint,
+        USDC_MINT,
+        token_out,
+    )
+
+    sell_impact = quote_price_impact_pct(
+        sell_quote
+    )
 
     if sell_impact > max_impact:
         return False, {
-            "reason": f"sell quote price impact {sell_impact:.2f}% > {max_impact:.2f}%",
+            "reason": (
+                f"sell quote price impact "
+                f"{sell_impact:.2f}% > "
+                f"{max_impact:.2f}%"
+            ),
             "buy_quote": buy_quote,
             "sell_quote": sell_quote,
         }
 
     immediate_value = (
-        as_int(sell_quote.get("outAmount")) / 10**USDC_DECIMALS
+        as_int(
+            sell_quote.get("outAmount")
+        )
+        / 10**USDC_DECIMALS
     )
+
     min_roundtrip = num(
-        trading.get("min_immediate_roundtrip_value_usdc"), 4.70
+        trading.get(
+            "min_immediate_roundtrip_value_usdc"
+        ),
+        4.70,
     )
 
     if immediate_value < min_roundtrip:
         return False, {
             "reason": (
-                f"immediate sell quote only ${immediate_value:.4f} "
-                f"< ${min_roundtrip:.2f}"
+                f"immediate sell quote only "
+                f"${immediate_value:.4f} < "
+                f"${min_roundtrip:.2f}"
             ),
             "buy_quote": buy_quote,
             "sell_quote": sell_quote,
@@ -311,9 +428,18 @@ def pretrade_roundtrip(
 
 def live_mode_enabled() -> bool:
     return (
-        os.getenv("TRADING_MODE", "").strip().lower() == "live"
-        and os.getenv("ENABLE_LIVE_TRADING", "").strip().upper() == "YES"
-        and os.getenv("I_UNDERSTAND_LIVE_TRADING", "").strip().upper() == "YES"
+        os.getenv(
+            "TRADING_MODE", ""
+        ).strip().lower()
+        == "live"
+        and os.getenv(
+            "ENABLE_LIVE_TRADING", ""
+        ).strip().upper()
+        == "YES"
+        and os.getenv(
+            "I_UNDERSTAND_LIVE_TRADING", ""
+        ).strip().upper()
+        == "YES"
     )
 
 
@@ -322,14 +448,25 @@ def call_live_swap(
     output_mint: str,
     amount: int,
 ) -> dict[str, Any]:
+
     if not live_mode_enabled():
-        raise RuntimeError("live trading safety interlock is not fully enabled")
+        raise RuntimeError(
+            "live trading safety interlock is not fully enabled"
+        )
 
-    if not os.getenv("BS58_PRIVATE_KEY", "").strip():
-        raise RuntimeError("BS58_PRIVATE_KEY is missing")
+    if not os.getenv(
+        "BS58_PRIVATE_KEY", ""
+    ).strip():
+        raise RuntimeError(
+            "BS58_PRIVATE_KEY is missing"
+        )
 
-    if not os.getenv("JUPITER_API_KEY", "").strip():
-        raise RuntimeError("JUPITER_API_KEY is missing")
+    if not os.getenv(
+        "JUPITER_API_KEY", ""
+    ).strip():
+        raise RuntimeError(
+            "JUPITER_API_KEY is missing"
+        )
 
     result = subprocess.run(
         [
@@ -355,26 +492,42 @@ def call_live_swap(
         )
 
     try:
-        payload = json.loads(result.stdout)
+        payload = json.loads(
+            result.stdout
+        )
     except json.JSONDecodeError as error:
         raise RuntimeError(
-            f"invalid live-swap response: {result.stdout[:500]}"
+            f"invalid live-swap response: "
+            f"{result.stdout[:500]}"
         ) from error
 
     if payload.get("status") != "Success":
-        raise RuntimeError(f"Jupiter execute failed: {payload}")
+        raise RuntimeError(
+            f"Jupiter execute failed: {payload}"
+        )
 
     return payload
 
 
-def send_telegram(message: str) -> bool:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+def send_telegram(
+    message: str,
+) -> bool:
+
+    token = os.getenv(
+        "TELEGRAM_BOT_TOKEN", ""
+    ).strip()
+
+    chat_id = os.getenv(
+        "TELEGRAM_CHAT_ID", ""
+    ).strip()
 
     if not token or not chat_id:
         return False
 
-    endpoint = f"https://api.telegram.org/bot{token}/sendMessage"
+    endpoint = (
+        f"https://api.telegram.org/"
+        f"bot{token}/sendMessage"
+    )
 
     body = urllib.parse.urlencode(
         {
@@ -389,13 +542,18 @@ def send_telegram(message: str) -> bool:
         data=body,
         method="POST",
         headers={
-            "Content-Type": "application/x-www-form-urlencoded"
+            "Content-Type":
+                "application/x-www-form-urlencoded"
         },
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=15):
+        with urllib.request.urlopen(
+            request,
+            timeout=15,
+        ):
             return True
+
     except Exception:
         return False
 
@@ -407,26 +565,46 @@ def open_position(
     trading: dict[str, Any],
     mode: str,
 ) -> None:
+
     mint = report["mint"]
-    trade_size = num(trading.get("trade_size_usdc"), 5.0)
-    input_amount = round(trade_size * 10**USDC_DECIMALS)
+
+    trade_size = num(
+        trading.get("trade_size_usdc"),
+        5.0,
+    )
+
+    input_amount = round(
+        trade_size * 10**USDC_DECIMALS
+    )
 
     if mode == "live":
+
         execution = call_live_swap(
             USDC_MINT,
             mint,
             input_amount,
         )
-        token_amount = as_int(execution.get("totalOutputAmount"))
-        signature = execution.get("signature")
+
+        token_amount = as_int(
+            execution.get(
+                "totalOutputAmount"
+            )
+        )
+
+        signature = execution.get(
+            "signature"
+        )
 
         if token_amount <= 0:
             raise RuntimeError(
                 "live buy succeeded but returned no token amount"
             )
+
     else:
         execution = None
-        token_amount = as_int(route.get("token_out_amount"))
+        token_amount = as_int(
+            route.get("token_out_amount")
+        )
         signature = None
 
     state["position"] = {
@@ -437,46 +615,96 @@ def open_position(
         "opened_at": now_iso(),
         "entry_value_usdc": trade_size,
         "token_amount_raw": token_amount,
-        "setup_score": report.get("setup_score"),
-        "risk_score": report.get("risk_score"),
-        "risk_level": report.get("risk_level"),
+        "setup_score": report.get(
+            "setup_score"
+        ),
+        "risk_score": report.get(
+            "risk_score"
+        ),
+        "risk_level": report.get(
+            "risk_level"
+        ),
+        "data_coverage_pct": report.get(
+            "data_coverage_pct"
+        ),
         "buy_signature": signature,
     }
 
     state["trades_today"] = (
-        as_int(state.get("trades_today")) + 1
+        as_int(
+            state.get("trades_today")
+        )
+        + 1
     )
 
-    message = (
-        f"{'LIVE' if mode == 'live' else 'PAPER'} BUY\n"
-        f"{report.get('name')} ({report.get('symbol')})\n"
-        f"Mint: {mint}\n"
-        f"Entry: ${trade_size:.2f}\n"
-        f"Hard stop trigger: "
-        f"${num(trading.get('hard_stop_value_usdc'), 4.10):.2f}\n"
-        f"Setup: {report.get('setup_score')}/100 | "
-        f"Risk: {report.get('risk_level')} "
-        f"{report.get('risk_score')}/100"
-    )
+    if mode == "paper":
+        message = (
+            "🚨 BUY SIGNAL\n\n"
+            f"🪙 Coin: "
+            f"{report.get('name')} "
+            f"({report.get('symbol')})\n"
+            f"📍 Address: {mint}\n"
+            f"⭐ Setup Score: "
+            f"{report.get('setup_score')}/100\n"
+            f"🛡 Risk Score: "
+            f"{report.get('risk_score')}/100\n"
+            f"Risk Level: "
+            f"{report.get('risk_level')}\n"
+            f"Data Coverage: "
+            f"{report.get('data_coverage_pct')}%\n\n"
+            "🟢 SIGNAL: BUY\n"
+            f"Paper entry: "
+            f"${trade_size:.2f}\n"
+            "Real trade: NOT EXECUTED\n"
+            "Manual decision only."
+        )
+
+    else:
+        message = (
+            "LIVE BUY EXECUTED\n"
+            f"{report.get('name')} "
+            f"({report.get('symbol')})\n"
+            f"Mint: {mint}\n"
+            f"Entry: ${trade_size:.2f}"
+        )
 
     print(message)
 
-    if bool(trading.get("telegram_enabled")):
-        send_telegram(message)
+    if bool(
+        trading.get("telegram_enabled")
+    ):
+        sent = send_telegram(message)
+        print(
+            "Telegram notification: "
+            + (
+                "SENT"
+                if sent
+                else "FAILED"
+            )
+        )
 
 
-def position_age_minutes(position: dict[str, Any]) -> float:
+def position_age_minutes(
+    position: dict[str, Any],
+) -> float:
+
     try:
         opened = datetime.fromisoformat(
-            position["opened_at"].replace("Z", "+00:00")
+            position["opened_at"].replace(
+                "Z",
+                "+00:00",
+            )
         )
+
         return max(
             0.0,
             (
-                datetime.now(timezone.utc) - opened
+                datetime.now(timezone.utc)
+                - opened
             ).total_seconds()
             / 60,
         )
+
     except Exception:
         return 0.0
 
@@ -484,14 +712,20 @@ def position_age_minutes(position: dict[str, Any]) -> float:
 def quote_position_value(
     position: dict[str, Any],
 ) -> tuple[float, dict[str, Any]]:
+
     quote = jupiter_quote(
         position["mint"],
         USDC_MINT,
-        as_int(position["token_amount_raw"]),
+        as_int(
+            position["token_amount_raw"]
+        ),
     )
 
     value = (
-        as_int(quote.get("outAmount")) / 10**USDC_DECIMALS
+        as_int(
+            quote.get("outAmount")
+        )
+        / 10**USDC_DECIMALS
     )
 
     return value, quote
@@ -503,95 +737,191 @@ def close_position(
     reason: str,
     quoted_value_usdc: float,
 ) -> None:
+
     position = state["position"]
     mode = position["mode"]
 
     if mode == "live":
+
         execution = call_live_swap(
             position["mint"],
             USDC_MINT,
-            as_int(position["token_amount_raw"]),
+            as_int(
+                position[
+                    "token_amount_raw"
+                ]
+            ),
         )
+
         actual_value = (
-            as_int(execution.get("totalOutputAmount"))
+            as_int(
+                execution.get(
+                    "totalOutputAmount"
+                )
+            )
             / 10**USDC_DECIMALS
         )
-        signature = execution.get("signature")
+
+        signature = execution.get(
+            "signature"
+        )
+
     else:
         actual_value = quoted_value_usdc
         signature = None
 
-    pnl = actual_value - num(position["entry_value_usdc"])
+    pnl = (
+        actual_value
+        - num(
+            position[
+                "entry_value_usdc"
+            ]
+        )
+    )
 
     state["realized_pnl_usdc"] = (
-        num(state.get("realized_pnl_usdc")) + pnl
+        num(
+            state.get(
+                "realized_pnl_usdc"
+            )
+        )
+        + pnl
     )
 
     if pnl < 0:
         state["consecutive_losses"] = (
-            as_int(state.get("consecutive_losses")) + 1
+            as_int(
+                state.get(
+                    "consecutive_losses"
+                )
+            )
+            + 1
         )
     else:
-        state["consecutive_losses"] = 0
+        state[
+            "consecutive_losses"
+        ] = 0
 
     history_entry = {
         **position,
         "closed_at": now_iso(),
-        "exit_value_usdc": actual_value,
+        "exit_value_usdc":
+            actual_value,
         "pnl_usdc": pnl,
         "exit_reason": reason,
         "sell_signature": signature,
     }
 
-    state.setdefault("paper_history", []).append(history_entry)
+    state.setdefault(
+        "paper_history",
+        [],
+    ).append(history_entry)
+
     state["position"] = None
 
-    message = (
-        f"{'LIVE' if mode == 'live' else 'PAPER'} EXIT\n"
-        f"{position.get('name')} ({position.get('symbol')})\n"
-        f"Reason: {reason}\n"
-        f"Exit value: ${actual_value:.4f}\n"
-        f"P/L: ${pnl:+.4f}\n"
-        f"Daily P/L: "
-        f"${num(state.get('realized_pnl_usdc')):+.4f}"
-    )
+    if mode == "paper":
+        message = (
+            "🚨 SELL SIGNAL\n\n"
+            f"🪙 Coin: "
+            f"{position.get('name')} "
+            f"({position.get('symbol')})\n"
+            f"📍 Address: "
+            f"{position.get('mint')}\n"
+            f"⭐ Entry Setup Score: "
+            f"{position.get('setup_score')}/100\n"
+            f"🛡 Entry Risk Score: "
+            f"{position.get('risk_score')}/100\n"
+            f"Risk Level: "
+            f"{position.get('risk_level')}\n\n"
+            "🔴 SIGNAL: SELL\n"
+            f"Reason: {reason}\n"
+            f"Paper exit value: "
+            f"${actual_value:.4f}\n"
+            f"Paper P/L: "
+            f"${pnl:+.4f}\n"
+            "Real trade: NOT EXECUTED\n"
+            "Manual decision only."
+        )
+
+    else:
+        message = (
+            "LIVE SELL EXECUTED\n"
+            f"{position.get('name')} "
+            f"({position.get('symbol')})\n"
+            f"Mint: "
+            f"{position.get('mint')}\n"
+            f"Reason: {reason}\n"
+            f"P/L: ${pnl:+.4f}"
+        )
 
     print(message)
 
-    if bool(trading.get("telegram_enabled")):
-        send_telegram(message)
+    if bool(
+        trading.get("telegram_enabled")
+    ):
+        sent = send_telegram(message)
+        print(
+            "Telegram notification: "
+            + (
+                "SENT"
+                if sent
+                else "FAILED"
+            )
+        )
 
 
 def manage_open_position(
     state: dict[str, Any],
     trading: dict[str, Any],
 ) -> None:
+
     position = state.get("position")
 
     if not position:
         return
 
     try:
-        value, quote = quote_position_value(position)
+        value, quote = (
+            quote_position_value(
+                position
+            )
+        )
+
     except Exception as error:
-        print(f"Position quote failed: {error}")
+        print(
+            f"Position quote failed: "
+            f"{error}"
+        )
         return
 
     print(
-        f"OPEN {position.get('symbol')} | "
-        f"quoted exit ${value:.4f} | "
+        f"OPEN "
+        f"{position.get('symbol')} | "
+        f"quoted exit "
+        f"${value:.4f} | "
         f"stop "
         f"${num(trading.get('hard_stop_value_usdc'), 4.10):.2f}"
     )
 
     stop = num(
-        trading.get("hard_stop_value_usdc"), 4.10
+        trading.get(
+            "hard_stop_value_usdc"
+        ),
+        4.10,
     )
+
     take_profit = num(
-        trading.get("take_profit_value_usdc"), 0.0
+        trading.get(
+            "take_profit_value_usdc"
+        ),
+        0.0,
     )
+
     max_hold = num(
-        trading.get("max_hold_minutes"), 60
+        trading.get(
+            "max_hold_minutes"
+        ),
+        60,
     )
 
     if value <= stop:
@@ -603,7 +933,10 @@ def manage_open_position(
         )
         return
 
-    if take_profit > 0 and value >= take_profit:
+    if (
+        take_profit > 0
+        and value >= take_profit
+    ):
         close_position(
             state,
             trading,
@@ -612,7 +945,12 @@ def manage_open_position(
         )
         return
 
-    if position_age_minutes(position) >= max_hold:
+    if (
+        position_age_minutes(
+            position
+        )
+        >= max_hold
+    ):
         close_position(
             state,
             trading,
@@ -625,16 +963,29 @@ def choose_candidate(
     config: dict[str, Any],
     state: dict[str, Any],
 ) -> dict[str, Any] | None:
-    trading = config["trading"]
-    seen = set(state.get("seen_mints", []))
 
-    for report in monitor.discover_reports(config):
+    trading = config["trading"]
+
+    seen = set(
+        state.get(
+            "seen_mints",
+            [],
+        )
+    )
+
+    for report in monitor.discover_reports(
+        config
+    ):
+
         mint = report["mint"]
 
         if mint in seen:
             continue
 
-        state.setdefault("seen_mints", []).append(mint)
+        state.setdefault(
+            "seen_mints",
+            [],
+        ).append(mint)
 
         passed, failures = report_gate(
             report,
@@ -642,36 +993,49 @@ def choose_candidate(
         )
 
         print(
-            f"CANDIDATE {report.get('symbol')} | "
-            f"setup {report.get('setup_score')}/100 | "
-            f"risk {report.get('risk_level')} "
+            f"CANDIDATE "
+            f"{report.get('symbol')} | "
+            f"setup "
+            f"{report.get('setup_score')}/100 | "
+            f"risk "
+            f"{report.get('risk_level')} "
             f"{report.get('risk_score')}/100 | "
             f"{'PASS' if passed else 'SKIP'}"
         )
 
         if not passed:
-            print("  " + "; ".join(failures))
+            print(
+                "  "
+                + "; ".join(failures)
+            )
             continue
 
         try:
-            route_ok, route = pretrade_roundtrip(
-                mint,
-                trading,
+            route_ok, route = (
+                pretrade_roundtrip(
+                    mint,
+                    trading,
+                )
             )
+
         except Exception as error:
             print(
-                f"  Jupiter round-trip check failed: {error}"
+                "  Jupiter round-trip "
+                f"check failed: {error}"
             )
             continue
 
         if not route_ok:
             print(
-                f"  Route check failed: "
+                "  Route check failed: "
                 f"{route.get('reason')}"
             )
             continue
 
-        report["_route_check"] = route
+        report[
+            "_route_check"
+        ] = route
+
         return report
 
     return None
@@ -681,7 +1045,9 @@ def run_once(
     config: dict[str, Any],
     state: dict[str, Any],
 ) -> None:
+
     trading = config["trading"]
+
     state_path = str(
         trading.get("state_file")
         or "bot_state.json"
@@ -692,6 +1058,7 @@ def run_once(
             state,
             trading,
         )
+
         save_state(
             state_path,
             state,
@@ -704,7 +1071,10 @@ def run_once(
     )
 
     if not allowed:
-        print(f"NO NEW TRADE: {reason}")
+        print(
+            f"NO NEW TRADE: {reason}"
+        )
+
         save_state(
             state_path,
             state,
@@ -717,19 +1087,33 @@ def run_once(
     )
 
     if not report:
+
         message = (
-            "🔎 PAPER BOT SCAN COMPLETE\n"
-            "No candidate passed every gate.\n"
-            "No trade opened."
+            "🔎 PAPER BOT SCAN COMPLETE\n\n"
+            "No candidate passed "
+            "every safety gate.\n"
+            "🟡 SIGNAL: WAIT\n"
+            "No manual buy signal."
         )
 
         print(message)
 
-        if bool(trading.get("telegram_enabled")):
-            sent = send_telegram(message)
+        if bool(
+            trading.get(
+                "telegram_enabled"
+            )
+        ):
+            sent = send_telegram(
+                message
+            )
+
             print(
                 "Telegram notification: "
-                + ("SENT" if sent else "FAILED")
+                + (
+                    "SENT"
+                    if sent
+                    else "FAILED"
+                )
             )
 
         save_state(
@@ -739,7 +1123,10 @@ def run_once(
         return
 
     configured_mode = str(
-        trading.get("trading_mode") or "paper"
+        trading.get(
+            "trading_mode"
+        )
+        or "paper"
     ).lower()
 
     env_mode = os.getenv(
@@ -758,9 +1145,10 @@ def run_once(
         and not live_mode_enabled()
     ):
         print(
-            "LIVE MODE REQUESTED BUT SAFETY "
-            "INTERLOCKS ARE NOT COMPLETE; "
-            "falling back to paper."
+            "LIVE MODE REQUESTED BUT "
+            "SAFETY INTERLOCKS ARE NOT "
+            "COMPLETE; falling back "
+            "to paper."
         )
         mode = "paper"
 
@@ -781,13 +1169,18 @@ def run_once(
 def print_safety_summary(
     trading: dict[str, Any],
 ) -> None:
+
     size = num(
-        trading.get("trade_size_usdc"),
+        trading.get(
+            "trade_size_usdc"
+        ),
         5.0,
     )
 
     stop = num(
-        trading.get("hard_stop_value_usdc"),
+        trading.get(
+            "hard_stop_value_usdc"
+        ),
         4.10,
     )
 
@@ -797,57 +1190,77 @@ def print_safety_summary(
     )
 
     pct = (
-        100.0 * planned / size
+        100.0
+        * planned
+        / size
         if size
         else 0.0
     )
 
-    print("Solana Meme Bot v0.4")
+    print(
+        "Solana Meme Bot v0.4"
+    )
+
     print(
         f"Mode default: "
         f"{trading.get('trading_mode')}"
     )
+
     print(
-        f"Trade size: ${size:.2f}"
+        f"Trade size: "
+        f"${size:.2f}"
     )
+
     print(
-        f"Hard stop trigger: ${stop:.2f}"
+        f"Hard stop trigger: "
+        f"${stop:.2f}"
     )
+
     print(
         f"Planned loss at trigger: "
-        f"${planned:.2f} ({pct:.1f}%), "
+        f"${planned:.2f} "
+        f"({pct:.1f}%), "
         f"before slippage/fees"
     )
+
     print(
         f"Minimum setup score: "
         f"{trading.get('min_setup_score')}/100"
     )
+
     print(
         f"Daily loss limit: "
         f"${num(trading.get('daily_loss_limit_usdc'), 2.70):.2f}"
     )
+
     print(
-        "A stop trigger is NOT a guaranteed "
-        "execution price on a fast or illiquid token."
+        "A stop trigger is NOT a "
+        "guaranteed execution price "
+        "on a fast or illiquid token."
     )
 
 
 def main() -> int:
+
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
         "--config",
         default="config.json",
     )
+
     parser.add_argument(
         "--once",
         action="store_true",
     )
+
     args = parser.parse_args()
 
     try:
         config = load_all_config(
             args.config
         )
+
     except Exception as error:
         print(
             f"Config error: {error}",
@@ -880,7 +1293,9 @@ def main() -> int:
     poll = max(
         5,
         as_int(
-            trading.get("poll_seconds"),
+            trading.get(
+                "poll_seconds"
+            ),
             10,
         ),
     )
@@ -888,7 +1303,9 @@ def main() -> int:
     discovery = max(
         poll,
         as_int(
-            trading.get("discovery_seconds"),
+            trading.get(
+                "discovery_seconds"
+            ),
             45,
         ),
     )
@@ -896,51 +1313,76 @@ def main() -> int:
     last_discovery = 0.0
 
     while True:
+
         try:
-            if state.get("position"):
+
+            if state.get(
+                "position"
+            ):
                 manage_open_position(
                     state,
                     trading,
                 )
+
                 save_state(
                     state_path,
                     state,
                 )
-                time.sleep(poll)
+
+                time.sleep(
+                    poll
+                )
                 continue
 
             now = time.time()
 
             if (
-                now - last_discovery
+                now
+                - last_discovery
                 >= discovery
             ):
                 run_once(
                     config,
                     state,
                 )
-                last_discovery = now
 
-            time.sleep(poll)
+                last_discovery = (
+                    now
+                )
+
+            time.sleep(
+                poll
+            )
 
         except KeyboardInterrupt:
+
             save_state(
                 state_path,
                 state,
             )
-            print("\nStopped.")
+
+            print(
+                "\nStopped."
+            )
+
             return 0
 
         except Exception as error:
+
             print(
-                f"Bot loop error: {error}",
+                f"Bot loop error: "
+                f"{error}",
                 file=sys.stderr,
             )
+
             save_state(
                 state_path,
                 state,
             )
-            time.sleep(poll)
+
+            time.sleep(
+                poll
+            )
 
 
 if __name__ == "__main__":
