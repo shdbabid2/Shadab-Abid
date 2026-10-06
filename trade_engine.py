@@ -60,6 +60,8 @@ DEFAULT_TRADING: dict[str, Any] = {
 
 PLANNED_STOP_LOSS_PCT = 18.0
 
+LAST_REJECTED_CANDIDATE: dict[str, Any] | None = None
+
 
 def num(value: Any, default: float = 0.0) -> float:
     try:
@@ -959,10 +961,47 @@ def manage_open_position(
         )
 
 
+def remember_rejected_candidate(
+    report: dict[str, Any],
+    reasons: list[str],
+) -> None:
+
+    global LAST_REJECTED_CANDIDATE
+
+    candidate = {
+        "report": report,
+        "reasons": list(reasons),
+    }
+
+    if LAST_REJECTED_CANDIDATE is None:
+        LAST_REJECTED_CANDIDATE = candidate
+        return
+
+    current = LAST_REJECTED_CANDIDATE["report"]
+
+    candidate_rank = (
+        as_int(report.get("setup_score")),
+        as_int(report.get("data_coverage_pct")),
+        -as_int(report.get("risk_score")),
+    )
+
+    current_rank = (
+        as_int(current.get("setup_score")),
+        as_int(current.get("data_coverage_pct")),
+        -as_int(current.get("risk_score")),
+    )
+
+    if candidate_rank > current_rank:
+        LAST_REJECTED_CANDIDATE = candidate
+
+
 def choose_candidate(
     config: dict[str, Any],
     state: dict[str, Any],
 ) -> dict[str, Any] | None:
+
+    global LAST_REJECTED_CANDIDATE
+    LAST_REJECTED_CANDIDATE = None
 
     trading = config["trading"]
 
@@ -1008,6 +1047,11 @@ def choose_candidate(
                 "  "
                 + "; ".join(failures)
             )
+
+            remember_rejected_candidate(
+                report,
+                failures,
+            )
             continue
 
         try:
@@ -1019,16 +1063,36 @@ def choose_candidate(
             )
 
         except Exception as error:
+            reason = (
+                "Jupiter round-trip check failed: "
+                f"{error}"
+            )
+
             print(
-                "  Jupiter round-trip "
-                f"check failed: {error}"
+                "  "
+                + reason
+            )
+
+            remember_rejected_candidate(
+                report,
+                [reason],
             )
             continue
 
         if not route_ok:
+            reason = str(
+                route.get("reason")
+                or "Jupiter route check failed"
+            )
+
             print(
                 "  Route check failed: "
-                f"{route.get('reason')}"
+                f"{reason}"
+            )
+
+            remember_rejected_candidate(
+                report,
+                [reason],
             )
             continue
 
@@ -1088,13 +1152,122 @@ def run_once(
 
     if not report:
 
-        message = (
-            "🔎 PAPER BOT SCAN COMPLETE\n\n"
-            "No candidate passed "
-            "every safety gate.\n"
-            "🟡 SIGNAL: WAIT\n"
-            "No manual buy signal."
-        )
+        rejected = LAST_REJECTED_CANDIDATE
+
+        if rejected:
+            rejected_report = (
+                rejected["report"]
+            )
+
+            reasons = (
+                rejected.get("reasons")
+                or ["failed a mandatory gate"]
+            )
+
+            market = (
+                rejected_report.get("market")
+                or {}
+            )
+
+            chain = (
+                rejected_report.get("chain")
+                or {}
+            )
+
+            lines = [
+                "🔴 REJECT / DO NOT BUY",
+                "",
+                (
+                    "🪙 Coin: "
+                    f"{rejected_report.get('name')} "
+                    f"({rejected_report.get('symbol')})"
+                ),
+                (
+                    "📍 Address: "
+                    f"{rejected_report.get('mint')}"
+                ),
+                (
+                    "⭐ Setup Score: "
+                    f"{rejected_report.get('setup_score')}/100"
+                ),
+                (
+                    "🛡 Risk Score: "
+                    f"{rejected_report.get('risk_score')}/100"
+                ),
+                (
+                    "Risk Level: "
+                    f"{rejected_report.get('risk_level')}"
+                ),
+                (
+                    "Data Coverage: "
+                    f"{rejected_report.get('data_coverage_pct')}%"
+                ),
+            ]
+
+            if market:
+                lines.append(
+                    "💧 Liquidity: "
+                    f"${num(market.get('liquidity_usd')):,.0f}"
+                )
+
+                lines.append(
+                    "📈 1h Volume: "
+                    f"${num(market.get('volume_1h_usd')):,.0f}"
+                )
+
+            top1 = chain.get(
+                "top1_account_pct"
+            )
+
+            top10 = chain.get(
+                "top10_accounts_pct"
+            )
+
+            if top1 is not None:
+                lines.append(
+                    "👤 Largest token account: "
+                    f"{num(top1):.1f}%"
+                )
+
+            if top10 is not None:
+                lines.append(
+                    "👥 Top 10 token accounts: "
+                    f"{num(top10):.1f}%"
+                )
+
+            lines.extend(
+                [
+                    "",
+                    "Failed gates:",
+                ]
+            )
+
+            for reason in reasons[:8]:
+                lines.append(
+                    f"• {reason}"
+                )
+
+            lines.extend(
+                [
+                    "",
+                    "🔴 SIGNAL: DO NOT BUY",
+                    "Real trade: NOT EXECUTED",
+                    "Manual decision only.",
+                ]
+            )
+
+            message = "\n".join(
+                lines
+            )
+
+        else:
+            message = (
+                "🔎 PAPER BOT SCAN COMPLETE\n\n"
+                "No new candidate was "
+                "available to evaluate.\n"
+                "🟡 SIGNAL: WAIT\n"
+                "No manual buy signal."
+            )
 
         print(message)
 
