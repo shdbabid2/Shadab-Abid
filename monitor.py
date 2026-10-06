@@ -2,13 +2,13 @@
 """
 Solana Meme Bot v0.5 - forensic, fail-closed read-only scanner.
 
-This scanner discovers newly surfaced Solana tokens, resolves them by exact
-mint, checks market structure through DEX Screener, verifies mint/holder data
-through Solana RPC, inspects Token-2022 extensions, aggregates the owners behind
-large token accounts, and produces separate setup/risk scores.
+The scanner discovers newly surfaced Solana tokens, resolves each exact mint,
+checks DEX market structure, verifies mint/holder facts with Solana RPC,
+inspects Token-2022 extensions, aggregates owners behind large token accounts,
+and produces separate setup/risk scores.
 
-Missing critical evidence is NOT treated as safe.
-A clean scan is not proof that a token cannot rug, be manipulated, or lose value.
+Missing critical evidence is treated as unsafe. No score is a probability of
+profit or proof that a token cannot rug, be manipulated, or lose value.
 """
 
 from __future__ import annotations
@@ -43,8 +43,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "http_timeout_seconds": 18,
     "new_pair_max_age_minutes": 120,
     "discover_limit": 15,
-
-    # Market-quality gates
     "min_liquidity_usd": 20000,
     "preferred_liquidity_usd": 50000,
     "min_1h_volume_usd": 15000,
@@ -55,8 +53,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "extreme_1h_move_pct": 180,
     "min_recent_transactions": 10,
     "min_1h_transactions": 25,
-
-    # Distribution gates
     "max_top1_account_pct": 20,
     "max_top5_accounts_pct": 45,
     "max_top10_accounts_pct": 60,
@@ -77,10 +73,7 @@ SAFE_TOKEN_2022_EXTENSIONS = {
     "tokengroupmember",
 }
 
-DANGEROUS_TOKEN_2022_EXTENSIONS: dict[
-    str,
-    tuple[str, int, str],
-] = {
+DANGEROUS_TOKEN_2022_EXTENSIONS: dict[str, tuple[str, int, str]] = {
     "transferfeeconfig": (
         "HIGH",
         28,
@@ -144,74 +137,39 @@ DANGEROUS_TOKEN_2022_EXTENSIONS: dict[
 }
 
 
-def num(
-    value: Any,
-    default: float = 0.0,
-) -> float:
+def num(value: Any, default: float = 0.0) -> float:
     try:
-        if value in (
-            None,
-            "",
-        ):
-            return default
-
-        return float(
-            value
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
+        return default if value in (None, "") else float(value)
+    except (TypeError, ValueError):
         return default
 
 
-def as_int(
-    value: Any,
-    default: int = 0,
-) -> int:
+def as_int(value: Any, default: int = 0) -> int:
     try:
-        if value in (
-            None,
-            "",
-        ):
-            return default
-
-        return int(
-            value
-        )
-
-    except (
-        TypeError,
-        ValueError,
-    ):
+        return default if value in (None, "") else int(value)
+    except (TypeError, ValueError):
         return default
 
 
-def normalize_extension_name(
-    value: Any,
-) -> str:
+def normalize_extension_name(value: Any) -> str:
     return "".join(
         ch.lower()
-        for ch in str(
-            value
-            or ""
-        )
+        for ch in str(value or "")
         if ch.isalnum()
     )
 
 
-def load_config(
-    path: str,
-) -> dict[str, Any]:
+def load_config(path: str) -> dict[str, Any]:
+    """
+    Load config.json, then let SOLANA_RPC_URL override it.
 
-    config = dict(
-        DEFAULT_CONFIG
-    )
+    GitHub Actions passes SOLANA_RPC_URL as a repository secret.
+    The example config also contains a public RPC URL, so the
+    environment override must be applied after the JSON file loads.
+    """
 
-    p = Path(
-        path
-    )
+    config = dict(DEFAULT_CONFIG)
+    p = Path(path)
 
     if p.exists():
         loaded = json.loads(
@@ -231,6 +189,16 @@ def load_config(
         config.update(
             loaded
         )
+
+    env_rpc = os.getenv(
+        "SOLANA_RPC_URL",
+        "",
+    ).strip()
+
+    if env_rpc:
+        config[
+            "rpc_url"
+        ] = env_rpc
 
     return config
 
@@ -662,16 +630,14 @@ def select_primary_pair(
 ) -> dict[str, Any] | None:
 
     parsed = [
-        parse_pair(
-            pair,
-            mint,
-        )
-        for pair in pairs
-    ]
-
-    parsed = [
         pair
-        for pair in parsed
+        for pair in (
+            parse_pair(
+                raw,
+                mint,
+            )
+            for raw in pairs
+        )
         if pair
     ]
 
@@ -784,7 +750,10 @@ def aggregate_largest_account_owners(
     timeout: int,
 ) -> dict[str, Any]:
 
-    result: dict[str, Any] = {
+    result: dict[
+        str,
+        Any,
+    ] = {
         "holder_owner_data_ok":
             False,
         "holder_owner_resolution_pct":
@@ -1473,9 +1442,7 @@ def risk_analysis(
 
     coverage = 0
 
-    # ============================================================
     # MARKET / POOL EVIDENCE = 40%
-    # ============================================================
 
     if market:
         coverage += 40
@@ -1649,18 +1616,16 @@ def risk_analysis(
             )
         )
 
-        extreme_5m = num(
-            config.get(
-                "extreme_5m_move_pct"
-            ),
-            70,
-        )
-
         if (
             abs(
                 move_5m
             )
-            >= extreme_5m
+            >= num(
+                config.get(
+                    "extreme_5m_move_pct"
+                ),
+                70,
+            )
         ):
             add_flag(
                 flags,
@@ -2057,9 +2022,7 @@ def risk_analysis(
             30,
         )
 
-    # ============================================================
     # EXACT MINT VERIFICATION = 25%
-    # ============================================================
 
     if chain.get(
         "rpc_mint_ok"
@@ -2183,9 +2146,7 @@ def risk_analysis(
             10,
         )
 
-    # ============================================================
     # TOKEN-2022 EXTENSIONS = 5%
-    # ============================================================
 
     if chain.get(
         "is_token_2022"
@@ -2215,9 +2176,7 @@ def risk_analysis(
     else:
         coverage += 5
 
-    # ============================================================
     # TOKEN-ACCOUNT CONCENTRATION = 20%
-    # ============================================================
 
     if chain.get(
         "holder_data_ok"
@@ -2332,9 +2291,7 @@ def risk_analysis(
             8,
         )
 
-    # ============================================================
     # OWNER AGGREGATION = 10%
-    # ============================================================
 
     owner_resolution = num(
         chain.get(
@@ -2349,6 +2306,7 @@ def risk_analysis(
         90,
     )
 
+    # Compatibility with existing unit-test fixtures.
     if (
         "holder_owner_data_ok"
         not in chain
@@ -3240,7 +3198,6 @@ def discover_reports(
                 report
             )
 
-    # Safety-first sorting.
     reports.sort(
         key=report_rank,
         reverse=True,
