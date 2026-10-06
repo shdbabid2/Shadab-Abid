@@ -577,9 +577,16 @@ def run_once(config: dict[str, Any], state: dict[str, Any]) -> None:
 
     report = choose_candidate(config, state)
     if not report:
-        print("No candidate passed every gate.")
-        save_state(state_path, state)
-        return
+    message = "🔎 PAPER BOT SCAN COMPLETE\nNo candidate passed every gate.\nNo trade opened."
+    print(message)
+    if bool(trading.get("telegram_enabled")):
+        sent = send_telegram(message)
+        print(f"Telegram notification: {'SENT' if sent else 'FAILED'}")
+    save_state(state_path, state)
+    return
+    
+        
+    
 
     configured_mode = str(trading.get("trading_mode") or "paper").lower()
     env_mode = os.getenv("TRADING_MODE", configured_mode).strip().lower()
